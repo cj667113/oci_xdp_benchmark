@@ -2,21 +2,40 @@ data "oci_identity_availability_domains" "ads" {
   compartment_id = var.compartment_ocid
 }
 
-data "oci_core_images" "ubuntu" {
-  for_each                 = var.benchmark_shapes
-  compartment_id           = var.compartment_ocid
-  operating_system         = var.image_operating_system
-  operating_system_version = var.image_operating_system_version
-  shape                    = each.value.shape
-  sort_by                  = "TIMECREATED"
-  sort_order               = "DESC"
+data "oci_core_images" "oracle_linux" {
+  for_each         = var.benchmark_shapes
+  compartment_id   = var.compartment_ocid
+  operating_system = "Oracle Linux"
+  shape            = each.value.shape
+  state            = "AVAILABLE"
+  sort_by          = "TIMECREATED"
+  sort_order       = "DESC"
 }
 
 locals {
   ad_name = var.availability_domain != "" ? var.availability_domain : data.oci_identity_availability_domains.ads.availability_domains[0].name
 
+  # OCI returns several image families whose operating_system is "Oracle Linux"
+  # (including Autonomous, Minimal, and GPU images). Keep only the standard OL
+  # platform image for the requested major release. The shape filter above keeps
+  # selection compatible with each shape (including architecture when Arm shapes
+  # are added to the matrix).
+  oracle_linux_image_candidates = {
+    for shape_key, result in data.oci_core_images.oracle_linux : shape_key => [
+      for image in result.images : image
+      if startswith(image.display_name, "Oracle-Linux-${var.oracle_linux_major_version}.")
+      && !strcontains(lower(image.display_name), "minimal")
+      && !strcontains(lower(image.display_name), "gpu")
+      && !strcontains(lower(image.display_name), "developer")
+    ]
+  }
+
   image_ids = {
-    for shape_key, images in data.oci_core_images.ubuntu : shape_key => images.images[0].id
+    for shape_key, images in local.oracle_linux_image_candidates : shape_key => try(images[0].id, "")
+  }
+
+  image_names = {
+    for shape_key, images in local.oracle_linux_image_candidates : shape_key => try(images[0].display_name, "")
   }
 
   environment_types = {
@@ -74,6 +93,7 @@ locals {
         shape         = profile.shape
         ocpus         = profile.ocpus
         memory_in_gbs = profile.memory_in_gbs
+        image_name    = local.image_names[shape_key]
         display_name  = "xdpbench-${shape_key}-${replace(node_key, "_", "-")}"
         peer_name     = "${shape_key}_${template.peer_suffix}"
       })
@@ -178,6 +198,13 @@ resource "oci_core_instance" "nodes" {
   shape                = each.value.shape
   preserve_boot_volume = false
 
+  lifecycle {
+    precondition {
+      condition     = local.image_ids[each.value.shape_key] != ""
+      error_message = "No standard Oracle Linux ${var.oracle_linux_major_version} platform image is available for shape ${each.value.shape}. Check that the shape and image family are offered in ${var.region}."
+    }
+  }
+
   shape_config {
     ocpus         = each.value.ocpus
     memory_in_gbs = each.value.memory_in_gbs
@@ -222,9 +249,10 @@ data "oci_core_vnic" "nodes" {
 resource "local_file" "ansible_inventory" {
   filename = "${path.module}/../inventory.ini"
   content = templatefile("${path.module}/templates/inventory.ini.tftpl", {
-    ssh_private_key_path = var.ssh_private_key_path
-    nodes                = data.oci_core_vnic.nodes
-    node_meta            = local.nodes
-    shape_keys           = keys(var.benchmark_shapes)
+    ssh_private_key_path       = var.ssh_private_key_path
+    nodes                      = data.oci_core_vnic.nodes
+    node_meta                  = local.nodes
+    shape_keys                 = keys(var.benchmark_shapes)
+    oracle_linux_major_version = var.oracle_linux_major_version
   })
 }

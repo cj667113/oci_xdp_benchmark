@@ -87,16 +87,15 @@ variable "benchmark_shapes" {
   }
 }
 
-variable "image_operating_system" {
-  description = "OCI image operating system name."
+variable "oracle_linux_major_version" {
+  description = "Oracle Linux major platform-image family. The newest compatible point/build image in this family is selected per shape."
   type        = string
-  default     = "Canonical Ubuntu"
-}
+  default     = "10"
 
-variable "image_operating_system_version" {
-  description = "OCI image operating system version."
-  type        = string
-  default     = "24.04"
+  validation {
+    condition     = can(regex("^[0-9]+$", var.oracle_linux_major_version))
+    error_message = "oracle_linux_major_version must be a numeric major release such as 10."
+  }
 }
 
 variable "assign_public_ip" {

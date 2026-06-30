@@ -2,6 +2,10 @@ output "image_ids" {
   value = local.image_ids
 }
 
+output "image_names" {
+  value = local.image_names
+}
+
 output "benchmark_shapes" {
   value = var.benchmark_shapes
 }

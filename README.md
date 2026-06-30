@@ -6,6 +6,11 @@ This lab provisions independent OCI benchmark pairs for multiple OCI shapes and 
 2. `nftables`
 3. `xdp`
 
+All instances use the newest standard Oracle Linux 10 OCI platform image that
+is compatible with their shape. Terraform performs image discovery per shape
+rather than relying on a hard-coded image OCID. E6 and E6.Ax (AMD Acceleron)
+are both x86_64; a true Arm shape added later would resolve its aarch64 image.
+
 The default Terraform shape matrix is:
 
 | Shape key | OCI shape | OCPUs | RAM | Nodes created |
@@ -49,6 +54,9 @@ Set at minimum:
 
 Strong recommendation: set `allowed_ssh_cidr` to your workstation public IP `/32`.
 
+The default `oracle_linux_major_version = "10"` selects the newest compatible
+Oracle Linux 10 point/build image available in the configured OCI region.
+
 Default shape matrix:
 
 ```hcl
@@ -76,6 +84,11 @@ terraform apply
 ```
 
 Terraform writes `../inventory.ini` for Ansible.
+
+Oracle Linux platform images use the `opc` SSH account; the generated inventory
+sets this automatically. Ansible enables `ol10_codeready_builder`, installs the
+DNF-based benchmark/eBPF toolchain, and disables `firewalld` before managing
+the benchmark's nftables and iptables-nft rules directly.
 
 Expected generated inventory groups:
 

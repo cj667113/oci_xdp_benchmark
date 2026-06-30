@@ -10,6 +10,10 @@ ssh_private_key_path = "~/.ssh/id_rsa"
 # Strongly recommended: replace this with your workstation public IP /32.
 allowed_ssh_cidr = "203.0.113.10/32"
 
+# Selects the newest standard Oracle Linux 10 platform image compatible with
+# each shape. E6 and E6.Ax (AMD Acceleron) are both x86_64 shapes.
+oracle_linux_major_version = "10"
+
 # This deploys 8 instances total:
 #   e6:    fw client/target + xdp client/target
 #   e6_ax: fw client/target + xdp client/target

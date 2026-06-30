@@ -9,35 +9,61 @@
     firewall_rule_count: 128         # synthetic no-match rules before accept
     xdp_mode: "xdpgeneric"          # xdpgeneric, xdpdrv, or auto (prefer native and fall back to generic)
   tasks:
-    - name: Install benchmark and eBPF packages
-      apt:
+    - name: Verify expected Oracle Linux platform image
+      assert:
+        that:
+          - ansible_distribution == 'OracleLinux'
+          - (ansible_distribution_major_version | string) == (oracle_linux_major_version | string)
+        fail_msg: >-
+          This benchmark requires Oracle Linux {{ oracle_linux_major_version }};
+          found {{ ansible_distribution }} {{ ansible_distribution_version }}.
+
+    - name: Install DNF repository management support
+      dnf:
+        name: dnf-plugins-core
+        state: present
+
+    - name: Enable Oracle Linux CodeReady Builder repository
+      command:
+        argv:
+          - dnf
+          - config-manager
+          - --enable
+          - "ol{{ oracle_linux_major_version }}_codeready_builder"
+      changed_when: false
+
+    - name: Install Oracle Linux benchmark and eBPF packages
+      dnf:
         name:
-          - build-essential
+          - gcc
+          - make
           - clang
           - llvm
-          - libbpf-dev
-          - libelf-dev
-          - iproute2
-          - iptables
+          - libbpf
+          - libbpf-devel
+          - elfutils-libelf-devel
+          - kernel-headers
+          - iproute
+          - iproute-tc
+          - iptables-nft
           - nftables
           - iperf3
           - jq
-          - linux-tools-common
+          - bpftool
           - ethtool
           - net-tools
           - python3
           - tar
+          - pciutils
+          - kmod
         state: present
         update_cache: true
 
-    - name: Try to install kernel-specific linux-tools package
-      apt:
-        name: "linux-tools-{{ ansible_kernel }}"
-        state: present
-      ignore_errors: true
-
-    - name: Disable UFW if present
-      command: ufw disable
+    - name: Disable firewalld before direct nftables and iptables configuration
+      systemd:
+        name: firewalld
+        state: stopped
+        enabled: false
       ignore_errors: true
 
     - name: Increase TCP/socket buffers for high-throughput tests
@@ -126,23 +152,23 @@
     - name: Configure nftables raw prerouting rules
       shell: |
         set -e
-        cat > /etc/nftables.conf <<'NFTHEAD'
+        cat > /etc/sysconfig/nftables.conf <<'NFTHEAD'
         flush ruleset
         table inet bench {
           chain preraw {
             type filter hook prerouting priority raw; policy accept;
         NFTHEAD
         for p in $(seq 10000 $((10000 + {{ firewall_rule_count }} - 1))); do
-          echo "    udp dport $p drop" >> /etc/nftables.conf
-          echo "    tcp dport $p drop" >> /etc/nftables.conf
+          echo "    udp dport $p drop" >> /etc/sysconfig/nftables.conf
+          echo "    tcp dport $p drop" >> /etc/sysconfig/nftables.conf
         done
-        cat >> /etc/nftables.conf <<NFTTAIL
+        cat >> /etc/sysconfig/nftables.conf <<NFTTAIL
             tcp dport {{ iperf_port }} accept
             udp dport {{ iperf_port }} accept
           }
         }
         NFTTAIL
-        nft -f /etc/nftables.conf
+        nft -f /etc/sysconfig/nftables.conf
         systemctl enable nftables
       args:
         executable: /bin/bash

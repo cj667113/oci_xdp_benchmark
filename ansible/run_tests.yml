@@ -23,6 +23,24 @@
       set_fact:
         bench_label: "{{ bench_mode }}_{{ shape_key }}_{{ bench_path }}"
 
+    - name: Read selected XDP capability from the target
+      shell: |
+        set -eu
+        . /var/lib/oci-netbench/xdp-capabilities.env
+        printf '%s\t%s\t%s\t%s\t%s\n' \
+          "$XDP_REQUESTED_MODE" "$XDP_SELECTED_MODE" "$XDP_SELECTED_SECTION" \
+          "$XDP_DRIVER" "$XDP_MTU"
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ target_peer_name }}"
+      register: target_xdp_capability
+      changed_when: false
+      when: bench_env == 'xdp'
+
+    - name: Normalize target XDP metadata
+      set_fact:
+        target_xdp_fields: "{{ target_xdp_capability.stdout.split('\t') if bench_env == 'xdp' else ['', '', '', '', ''] }}"
+
     - name: Run benchmark
       shell: |
         set -e
@@ -34,7 +52,12 @@
           "{{ duration }}" \
           "{{ parallel_streams }}" \
           "{{ ping_count }}" \
-          "{{ udp_len }}"
+          "{{ udp_len }}" \
+          "{{ target_xdp_fields[0] }}" \
+          "{{ target_xdp_fields[1] }}" \
+          "{{ target_xdp_fields[2] }}" \
+          "{{ target_xdp_fields[3] }}" \
+          "{{ target_xdp_fields[4] }}"
       args:
         executable: /bin/bash
       register: bench_run

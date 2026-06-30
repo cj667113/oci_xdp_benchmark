@@ -36,7 +36,11 @@ static __always_inline int inspect_port(__u16 dport)
     return XDP_PASS;
 }
 
+#ifdef XDP_FRAGS
+SEC("xdp.frags")
+#else
 SEC("xdp")
+#endif
 int xdp_bench_filter(struct xdp_md *ctx)
 {
     void *data     = (void *)(long)ctx->data;

@@ -115,6 +115,11 @@ def summarize_tar(path: Path) -> Dict[str, Any]:
             "udp_rate": meta.get("udp_rate"),
             "udp_len": meta.get("udp_len"),
             "kernel": meta.get("kernel"),
+            "xdp_requested_mode": meta.get("xdp_requested_mode"),
+            "xdp_selected_mode": meta.get("xdp_selected_mode"),
+            "xdp_selected_section": meta.get("xdp_selected_section"),
+            "xdp_driver": meta.get("xdp_driver"),
+            "xdp_mtu": meta.get("xdp_mtu"),
         })
         row.update(parse_label(label))
         row.update(parse_ping(read_member(tar, "ping.txt")))
@@ -251,7 +256,9 @@ def write_outputs(rows: List[Dict[str, Any]], root: Path) -> Tuple[Path, Path, L
 
     md_path = root / "summary.md"
     preferred = [
-        "test_mode", "firewall_mode", "shape_key", "path", "lat_avg_ms", "lat_mdev_ms", "packet_loss_pct",
+        "test_mode", "firewall_mode", "shape_key", "path",
+        "xdp_requested_mode", "xdp_selected_mode", "xdp_selected_section", "xdp_driver", "xdp_mtu",
+        "lat_avg_ms", "lat_mdev_ms", "packet_loss_pct",
         "tcp_forward_recv_gbps", "tcp_reverse_recv_gbps",
         "udp_smallpps_pps", "udp_smallpps_lost_percent",
         "udp_throughput_gbps", "udp_throughput_jitter_ms", "udp_throughput_lost_percent",

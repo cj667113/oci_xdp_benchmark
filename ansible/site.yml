@@ -7,7 +7,7 @@
     iperf_port: 5201
     firewall_mode: "nftables"       # nftables or iptables
     firewall_rule_count: 128         # synthetic no-match rules before accept
-    xdp_mode: "xdpgeneric"          # xdpgeneric is safest on OCI VMs; try xdpdrv only if the NIC supports native XDP
+    xdp_mode: "xdpgeneric"          # xdpgeneric, xdpdrv, or auto (prefer native and fall back to generic)
   tasks:
     - name: Install benchmark and eBPF packages
       apt:
@@ -166,6 +166,12 @@
     firewall_rule_count: 128
     xdp_mode: "xdpgeneric"
   tasks:
+    - name: Validate requested XDP mode
+      assert:
+        that:
+          - xdp_mode in ['xdpgeneric', 'xdpdrv', 'auto']
+        fail_msg: "xdp_mode must be one of: xdpgeneric, xdpdrv, auto"
+
     - name: Flush kernel firewall state on XDP target
       shell: |
         nft flush ruleset || true
@@ -186,6 +192,14 @@
         dest: /opt/xdp_filter.c
         mode: "0644"
 
+    - name: Install XDP compatibility preflight
+      copy:
+        src: files/xdp_preflight.sh
+        dest: /usr/local/sbin/xdp_preflight.sh
+        owner: root
+        group: root
+        mode: "0755"
+
     - name: Compile XDP program
       shell: |
         set -e
@@ -198,18 +212,47 @@
           -DRULE_SCAN={{ firewall_rule_count }} \
           -I"${INCDIR}" \
           -c /opt/xdp_filter.c -o /opt/xdp_filter.o
+        clang -O2 -g -Wall -target bpf \
+          -D__TARGET_ARCH_${ARCH} \
+          -DTEST_PORT={{ iperf_port }} \
+          -DRULE_SCAN={{ firewall_rule_count }} \
+          -DXDP_FRAGS \
+          -I"${INCDIR}" \
+          -c /opt/xdp_filter.c -o /opt/xdp_filter_frags.o
         llvm-objdump -S /opt/xdp_filter.o > /opt/xdp_filter.objdump.txt
+        llvm-objdump -S /opt/xdp_filter_frags.o > /opt/xdp_filter_frags.objdump.txt
       args:
         executable: /bin/bash
 
+    - name: Probe XDP and driver compatibility with the benchmark program
+      command:
+        argv:
+          - /usr/local/sbin/xdp_preflight.sh
+          - "{{ ansible_default_ipv4.interface }}"
+          - "{{ xdp_mode }}"
+          - /opt/xdp_filter.o
+          - /opt/xdp_filter_frags.o
+          - /var/lib/oci-netbench/xdp-capabilities.env
+      register: xdp_preflight
+      changed_when: false
+
+    - name: Show XDP compatibility verdict
+      debug:
+        var: xdp_preflight.stdout_lines
+
     - name: Attach XDP program
       shell: |
-        set -e
+        set -eu
         IFACE="{{ ansible_default_ipv4.interface }}"
+        . /var/lib/oci-netbench/xdp-capabilities.env
         ip link set dev "$IFACE" xdp off || true
         ip link set dev "$IFACE" xdpgeneric off || true
         ip link set dev "$IFACE" xdpdrv off || true
-        ip link set dev "$IFACE" {{ xdp_mode }} obj /opt/xdp_filter.o sec xdp
+        ip link set dev "$IFACE" "$XDP_SELECTED_MODE" \
+          obj "$XDP_SELECTED_OBJECT" sec "$XDP_SELECTED_SECTION"
+        printf 'requested=%s selected=%s section=%s driver=%s mtu=%s\n' \
+          "$XDP_REQUESTED_MODE" "$XDP_SELECTED_MODE" "$XDP_SELECTED_SECTION" \
+          "$XDP_DRIVER" "$XDP_MTU"
         ip -details link show dev "$IFACE"
       args:
         executable: /bin/bash

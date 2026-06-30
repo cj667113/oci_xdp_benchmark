@@ -25,6 +25,7 @@ The benchmark collects:
 - UDP throughput and jitter
 - Small-packet UDP packets per second estimate
 - Linux link, qdisc, and nstat counters before/after each run
+- Requested and selected XDP mode, ELF section, target driver, and target MTU
 
 The Linux egress cap is set to `10gbit` with `tc`, so the test has a consistent maximum bandwidth cap. The shape config is also locked to 10 OCPUs and 80 GB RAM per instance in Terraform validation.
 
@@ -116,6 +117,20 @@ Defaults:
 - `UDP_RATE=10G`
 - `XDP_MODE=xdpgeneric`
 
+Before attaching the benchmark filter, Ansible now tests the actual compiled
+program in generic mode, native driver mode, and native `xdp.frags` mode. The
+probe records the interface, driver, kernel, MTU, raw attach failures, and its
+normalized verdict on each XDP target in:
+
+```text
+/var/lib/oci-netbench/xdp-capabilities.txt
+/var/lib/oci-netbench/xdp-capabilities.env
+```
+
+This is an attach-based check: a driver name or advertised feature alone is not
+treated as proof that the benchmark program can run. The probe always detaches
+its temporary programs before the configured benchmark program is attached.
+
 Override examples:
 
 ```bash
@@ -136,13 +151,23 @@ MODES="xdp" ./run_matrix.sh
 MODES="iptables nftables" ./run_matrix.sh
 ```
 
-Try native XDP only if the OCI NIC/driver supports it:
+Require native XDP (the play fails early if neither the plain nor the
+multi-buffer/`xdp.frags` program can attach):
 
 ```bash
 XDP_MODE=xdpdrv ./run_matrix.sh
 ```
 
-If native XDP fails, use the default `xdpgeneric` mode.
+Prefer native XDP and automatically fall back to generic XDP:
+
+```bash
+XDP_MODE=auto ./run_matrix.sh
+```
+
+Keep `XDP_MODE=xdpgeneric` when the comparison must use the same generic XDP
+path on every OCI shape. Hardware-offloaded XDP (`xdpoffload`) is intentionally
+not selected by this benchmark; it is a separate capability from native
+driver-mode XDP.
 
 ## 4. Results and PNG charts
 
@@ -175,6 +200,10 @@ The summary includes these grouping columns:
 - `firewall_mode`: `iptables` or `nftables` for firewall tests; blank for XDP
 - `shape_key`: `e6`, `e6_ax`, or any extra shape key you add
 - `path`: `firewall` or `xdp`
+- `xdp_requested_mode`: `xdpgeneric`, `xdpdrv`, or `auto` for XDP tests
+- `xdp_selected_mode`: the attach mode actually benchmarked
+- `xdp_selected_section`: `xdp` or `xdp.frags`
+- `xdp_driver` and `xdp_mtu`: target interface context captured by the preflight
 
 Run the summarizer manually if needed:
 

@@ -86,14 +86,40 @@
 
     - name: Set fq qdisc bandwidth cap on egress
       shell: |
-        set -e
+        set -euo pipefail
         IFACE="{{ ansible_facts['default_ipv4']['interface'] }}"
-        tc qdisc replace dev "$IFACE" root handle 1: htb default 1
-        tc class replace dev "$IFACE" parent 1: classid 1:1 htb rate {{ bandwidth_cap }} ceil {{ bandwidth_cap }}
-        tc qdisc replace dev "$IFACE" parent 1:1 fq
+        CHANGED=0
+
+        ROOT_STATE=$(tc qdisc show dev "$IFACE")
+        if ! grep -Eq "^qdisc htb 1: (dev ${IFACE} )?root .* r2q 10000 .*default (0x)?1 " <<< "$ROOT_STATE"; then
+          tc qdisc del dev "$IFACE" root 2>/dev/null || true
+          tc qdisc add dev "$IFACE" root handle 1: htb default 1 r2q 10000
+          CHANGED=1
+        fi
+
+        CLASS_STATE=$(tc class show dev "$IFACE")
+        if ! grep -Eqi '^class htb 1:1 root .* rate {{ bandwidth_cap }} ceil {{ bandwidth_cap }} ' <<< "$CLASS_STATE"; then
+          tc class replace dev "$IFACE" parent 1: classid 1:1 htb \
+            rate {{ bandwidth_cap }} ceil {{ bandwidth_cap }}
+          CHANGED=1
+        fi
+
+        LEAF_STATE=$(tc qdisc show dev "$IFACE")
+        if ! grep -Eq "^qdisc fq [^ ]+: (dev ${IFACE} )?parent 1:1 " <<< "$LEAF_STATE"; then
+          tc qdisc del dev "$IFACE" parent 1:1 2>/dev/null || true
+          tc qdisc add dev "$IFACE" parent 1:1 fq
+          CHANGED=1
+        fi
+
+        echo "tc_changed=${CHANGED}"
         tc qdisc show dev "$IFACE"
+        tc class show dev "$IFACE"
       args:
         executable: /bin/bash
+      register: bandwidth_qdisc
+      changed_when: "'tc_changed=1' in bandwidth_qdisc.stdout"
+      tags:
+        - bandwidth_qdisc
 
     - name: Install benchmark runner script
       copy:

@@ -10,18 +10,26 @@
     parallel_streams: 8
     ping_count: 100
     udp_len: 64
+    benchmark_repetitions: 10
     test_label: "manual"
     run_id: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
   tasks:
     - name: Pick peer and label for this client
       set_fact:
         target_peer_name: "{{ peer_name }}"
-        bench_mode: "{{ 'xdp' if bench_env == 'xdp' else test_label }}"
+        bench_mode: "{{ test_label }}"
         bench_path: "{{ 'xdp' if bench_env == 'xdp' else 'firewall' }}"
 
-    - name: Build benchmark label
+    - name: Validate benchmark repetition count
+      assert:
+        that:
+          - (benchmark_repetitions | int) > 0
+          - (benchmark_repetitions | string) is match('^[1-9][0-9]*$')
+        fail_msg: "benchmark_repetitions must be a positive integer"
+
+    - name: Build benchmark label prefix
       set_fact:
-        bench_label: "{{ bench_mode }}_{{ shape_key }}_{{ bench_path }}"
+        bench_label_prefix: "{{ bench_mode }}_{{ shape_key }}_{{ bench_path }}"
 
     - name: Read selected XDP capability from the target
       shell: |
@@ -41,12 +49,12 @@
       set_fact:
         target_xdp_fields: "{{ target_xdp_capability.stdout.split('\t') if bench_env == 'xdp' else ['', '', '', '', ''] }}"
 
-    - name: Run benchmark
+    - name: Run benchmark samples
       shell: |
         set -e
         /usr/local/bin/oci_netbench_run.sh \
           "{{ hostvars[target_peer_name].private_ip }}" \
-          "{{ bench_label }}" \
+          "{{ bench_label_prefix }}_run{{ '%02d' | format(sample_index | int) }}" \
           "{{ iperf_port }}" \
           "{{ udp_rate }}" \
           "{{ duration }}" \
@@ -57,17 +65,31 @@
           "{{ target_xdp_fields[1] }}" \
           "{{ target_xdp_fields[2] }}" \
           "{{ target_xdp_fields[3] }}" \
-          "{{ target_xdp_fields[4] }}"
+          "{{ target_xdp_fields[4] }}" \
+          "{{ sample_index }}" \
+          "{{ benchmark_repetitions }}"
       args:
         executable: /bin/bash
-      register: bench_run
+      loop: "{{ range(1, (benchmark_repetitions | int) + 1) | list }}"
+      loop_control:
+        loop_var: sample_index
+        label: "sample {{ sample_index }}/{{ benchmark_repetitions }}"
+      register: bench_runs
 
-    - name: Fetch result tarball
+    - name: Fetch result tarballs
       fetch:
-        src: "{{ bench_run.stdout_lines[-1] }}"
+        src: "{{ benchmark_run.stdout_lines[-1] }}"
         dest: "../results/{{ run_id }}/"
         flat: true
+      loop: "{{ bench_runs.results }}"
+      loop_control:
+        loop_var: benchmark_run
+        label: "{{ benchmark_run.stdout_lines[-1] }}"
 
-    - name: Print result bundle path
+    - name: Print result bundle paths
       debug:
-        msg: "Fetched {{ bench_run.stdout_lines[-1] }} into results/{{ run_id }}/"
+        msg: "Fetched {{ benchmark_run.stdout_lines[-1] }} into results/{{ run_id }}/"
+      loop: "{{ bench_runs.results }}"
+      loop_control:
+        loop_var: benchmark_run
+        label: "{{ benchmark_run.stdout_lines[-1] }}"

@@ -1,10 +1,11 @@
-# OCI XDP vs iptables/nftables Benchmark Lab
+# OCI iptables/nftables vs Generic/Native XDP Benchmark Lab
 
-This lab provisions independent OCI benchmark pairs for multiple OCI shapes and runs a three-mode packet-filter performance matrix:
+This lab provisions independent OCI benchmark pairs for multiple OCI shapes and runs a four-mode packet-filter performance matrix:
 
 1. `iptables`
 2. `nftables`
-3. `xdp`
+3. `xdp-generic`
+4. `xdp-native`
 
 All instances use the newest standard Oracle Linux 10 OCI platform image that
 is compatible with their shape. Terraform performs image discovery per shape
@@ -21,7 +22,7 @@ The default Terraform shape matrix is:
 That is 8 instances total by default:
 
 - `*_fw_client` -> `*_fw_target`: sequentially configured and tested as `iptables`, then `nftables`
-- `*_xdp_client` -> `*_xdp_target`: configured and tested as `xdp`
+- `*_xdp_client` -> `*_xdp_target`: tested sequentially with generic/SKB-mode XDP and native driver-mode XDP
 
 The benchmark collects:
 
@@ -113,14 +114,15 @@ cd ../ansible
 By default, `run_matrix.sh` runs exactly these modes:
 
 ```bash
-MODES="iptables nftables xdp"
+MODES="iptables nftables xdp-generic xdp-native"
 ```
 
 The execution order is:
 
 1. Configure `*_fw_target` with synthetic `iptables` rules, then test `*_fw_client -> *_fw_target`
 2. Configure `*_fw_target` with synthetic `nftables` rules, then test `*_fw_client -> *_fw_target`
-3. Configure `*_xdp_target` with the XDP program, then test `*_xdp_client -> *_xdp_target`
+3. Configure `*_xdp_target` with generic XDP, then test `*_xdp_client -> *_xdp_target`
+4. Reconfigure `*_xdp_target` with native driver-mode XDP, then repeat the same tests
 
 Defaults:
 
@@ -128,7 +130,11 @@ Defaults:
 - `DURATION=30`
 - `PARALLEL=8`
 - `UDP_RATE=10G`
-- `XDP_MODE=xdpgeneric`
+- `REPETITIONS=10`
+
+Each repetition runs the full ping, TCP forward, TCP reverse, small-packet UDP,
+and UDP-throughput sequence. With the default durations, the complete four-mode
+matrix takes roughly 95–100 minutes plus configuration and SSH overhead.
 
 Before attaching the benchmark filter, Ansible now tests the actual compiled
 program in generic mode, native driver mode, and native `xdp.frags` mode. The
@@ -147,7 +153,7 @@ its temporary programs before the configured benchmark program is attached.
 Override examples:
 
 ```bash
-RULE_COUNT=512 DURATION=60 PARALLEL=16 UDP_RATE=10G ./run_matrix.sh
+RULE_COUNT=512 DURATION=60 PARALLEL=16 UDP_RATE=10G REPETITIONS=10 ./run_matrix.sh
 ```
 
 Run only one shape group:
@@ -157,30 +163,25 @@ LIMIT=e6 ./run_matrix.sh
 LIMIT=e6_ax ./run_matrix.sh
 ```
 
-Run only one or two modes:
+Run selected modes:
 
 ```bash
-MODES="xdp" ./run_matrix.sh
+MODES="xdp-generic xdp-native" ./run_matrix.sh
+MODES="xdp-native" ./run_matrix.sh
 MODES="iptables nftables" ./run_matrix.sh
 ```
 
-Require native XDP (the play fails early if neither the plain nor the
-multi-buffer/`xdp.frags` program can attach):
+Add a native-XDP result to an existing run directory and regenerate its summary:
 
 ```bash
-XDP_MODE=xdpdrv ./run_matrix.sh
+RUN_ID=20260630T173437Z MODES="xdp-native" ./run_matrix.sh
 ```
 
-Prefer native XDP and automatically fall back to generic XDP:
-
-```bash
-XDP_MODE=auto ./run_matrix.sh
-```
-
-Keep `XDP_MODE=xdpgeneric` when the comparison must use the same generic XDP
-path on every OCI shape. Hardware-offloaded XDP (`xdpoffload`) is intentionally
-not selected by this benchmark; it is a separate capability from native
-driver-mode XDP.
+`xdp-native` is strict: the play fails rather than silently falling back to
+generic mode if neither the plain nor multi-buffer/`xdp.frags` native program
+can attach. This prevents generic results from being mislabeled as native.
+Hardware-offloaded XDP (`xdpoffload`) remains outside this benchmark because it
+is a separate capability from native driver-mode XDP.
 
 ## 4. Results and PNG charts
 
@@ -194,6 +195,7 @@ At the end of every `run_matrix.sh` run, the summarizer creates:
 
 ```bash
 results/<RUN_ID>/summary.csv
+results/<RUN_ID>/summary_aggregated.csv
 results/<RUN_ID>/summary.md
 results/<RUN_ID>/png/lat_avg_ms.png
 results/<RUN_ID>/png/packet_loss_pct.png
@@ -205,11 +207,20 @@ results/<RUN_ID>/png/udp_throughput_lost_percent.png
 results/<RUN_ID>/png/udp_smallpps_pps.png
 ```
 
-The PNG charts compare `iptables`, `nftables`, and `xdp` side by side for each OCI shape group.
+The PNG charts compare `iptables`, `nftables`, `xdp-generic`, and `xdp-native`
+side by side for each OCI shape group. The charts use a high-resolution,
+color-accessible grouped-bar design. Each bar is the sample mean, each whisker
+is the Student's t 95% confidence interval for that mean, and the overlaid dots
+are the individual runs. Bar labels include the relative change from the
+iptables result for the same OCI shape. Labels use compact units and each chart
+states whether higher or lower values are better. A confidence interval is only
+drawn when at least two samples are available. `summary.csv` retains every raw
+sample; `summary_aggregated.csv` contains grouped mean, standard deviation, and
+95% confidence-interval margin values.
 
 The summary includes these grouping columns:
 
-- `test_mode`: `iptables`, `nftables`, or `xdp`
+- `test_mode`: `iptables`, `nftables`, `xdp-generic`, or `xdp-native`
 - `firewall_mode`: `iptables` or `nftables` for firewall tests; blank for XDP
 - `shape_key`: `e6`, `e6_ax`, or any extra shape key you add
 - `path`: `firewall` or `xdp`
@@ -247,11 +258,18 @@ ansible-playbook -i ../inventory.ini site.yml --limit fw -e firewall_mode=iptabl
 ansible-playbook -i ../inventory.ini run_tests.yml --limit fw -e test_label=iptables
 ```
 
-Configure XDP and run one test across all shape labs:
+Configure and run generic XDP across all shape labs:
 
 ```bash
 ansible-playbook -i ../inventory.ini site.yml --limit xdp -e firewall_rule_count=128 -e xdp_mode=xdpgeneric
-ansible-playbook -i ../inventory.ini run_tests.yml --limit xdp -e test_label=xdp
+ansible-playbook -i ../inventory.ini run_tests.yml --limit xdp -e test_label=xdp-generic
+```
+
+Configure and run native XDP across all shape labs:
+
+```bash
+ansible-playbook -i ../inventory.ini site.yml --limit xdp -e firewall_rule_count=128 -e xdp_mode=xdpdrv
+ansible-playbook -i ../inventory.ini run_tests.yml --limit xdp -e test_label=xdp-native
 ```
 
 Run a manual test for only Acceleron:

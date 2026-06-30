@@ -2,3 +2,5 @@ terraform/terraform.tfvars
 .terraform*
 terraform.tfstate
 inventory.ini
+results/*
+.DS_Store

@@ -12,11 +12,12 @@
     - name: Verify expected Oracle Linux platform image
       assert:
         that:
-          - ansible_distribution == 'OracleLinux'
-          - (ansible_distribution_major_version | string) == (oracle_linux_major_version | string)
+          - ansible_facts['distribution'] == 'OracleLinux'
+          - (ansible_facts['distribution_major_version'] | string) == (oracle_linux_major_version | string)
         fail_msg: >-
           This benchmark requires Oracle Linux {{ oracle_linux_major_version }};
-          found {{ ansible_distribution }} {{ ansible_distribution_version }}.
+          found {{ ansible_facts['distribution'] }}
+          {{ ansible_facts['distribution_version'] }}.
 
     - name: Install DNF repository management support
       dnf:
@@ -86,7 +87,7 @@
     - name: Set fq qdisc bandwidth cap on egress
       shell: |
         set -e
-        IFACE="{{ ansible_default_ipv4.interface }}"
+        IFACE="{{ ansible_facts['default_ipv4']['interface'] }}"
         tc qdisc replace dev "$IFACE" root handle 1: htb default 1
         tc class replace dev "$IFACE" parent 1: classid 1:1 htb rate {{ bandwidth_cap }} ceil {{ bandwidth_cap }}
         tc qdisc replace dev "$IFACE" parent 1:1 fq
@@ -112,7 +113,7 @@
   tasks:
     - name: Detach any XDP program from firewall target
       shell: |
-        IFACE="{{ ansible_default_ipv4.interface }}"
+        IFACE="{{ ansible_facts['default_ipv4']['interface'] }}"
         ip link set dev "$IFACE" xdp off || true
         ip link set dev "$IFACE" xdpgeneric off || true
         ip link set dev "$IFACE" xdpdrv off || true
@@ -230,7 +231,7 @@
       shell: |
         set -e
         ARCH="x86"
-        if [ "{{ ansible_architecture }}" = "aarch64" ] || [ "{{ ansible_architecture }}" = "arm64" ]; then ARCH="arm64"; fi
+        if [ "{{ ansible_facts['architecture'] }}" = "aarch64" ] || [ "{{ ansible_facts['architecture'] }}" = "arm64" ]; then ARCH="arm64"; fi
         INCDIR="/usr/include/$(gcc -dumpmachine)"
         clang -O2 -g -Wall -target bpf \
           -D__TARGET_ARCH_${ARCH} \
@@ -254,7 +255,7 @@
       command:
         argv:
           - /usr/local/sbin/xdp_preflight.sh
-          - "{{ ansible_default_ipv4.interface }}"
+          - "{{ ansible_facts['default_ipv4']['interface'] }}"
           - "{{ xdp_mode }}"
           - /opt/xdp_filter.o
           - /opt/xdp_filter_frags.o
@@ -269,7 +270,7 @@
     - name: Attach XDP program
       shell: |
         set -eu
-        IFACE="{{ ansible_default_ipv4.interface }}"
+        IFACE="{{ ansible_facts['default_ipv4']['interface'] }}"
         . /var/lib/oci-netbench/xdp-capabilities.env
         ip link set dev "$IFACE" xdp off || true
         ip link set dev "$IFACE" xdpgeneric off || true

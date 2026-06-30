@@ -1,0 +1,230 @@
+---
+- name: Common benchmark host setup
+  hosts: all
+  become: true
+  vars:
+    bandwidth_cap: "10gbit"
+    iperf_port: 5201
+    firewall_mode: "nftables"       # nftables or iptables
+    firewall_rule_count: 128         # synthetic no-match rules before accept
+    xdp_mode: "xdpgeneric"          # xdpgeneric is safest on OCI VMs; try xdpdrv only if the NIC supports native XDP
+  tasks:
+    - name: Install benchmark and eBPF packages
+      apt:
+        name:
+          - build-essential
+          - clang
+          - llvm
+          - libbpf-dev
+          - libelf-dev
+          - iproute2
+          - iptables
+          - nftables
+          - iperf3
+          - jq
+          - linux-tools-common
+          - ethtool
+          - net-tools
+          - python3
+          - tar
+        state: present
+        update_cache: true
+
+    - name: Try to install kernel-specific linux-tools package
+      apt:
+        name: "linux-tools-{{ ansible_kernel }}"
+        state: present
+      ignore_errors: true
+
+    - name: Disable UFW if present
+      command: ufw disable
+      ignore_errors: true
+
+    - name: Increase TCP/socket buffers for high-throughput tests
+      copy:
+        dest: /etc/sysctl.d/99-oci-netbench.conf
+        mode: "0644"
+        content: |
+          net.core.rmem_max = 268435456
+          net.core.wmem_max = 268435456
+          net.core.netdev_max_backlog = 250000
+          net.ipv4.tcp_rmem = 4096 87380 268435456
+          net.ipv4.tcp_wmem = 4096 65536 268435456
+          net.ipv4.tcp_mtu_probing = 1
+          net.ipv4.ip_forward = 0
+
+    - name: Apply sysctl tuning
+      command: sysctl --system
+      changed_when: false
+
+    - name: Set fq qdisc bandwidth cap on egress
+      shell: |
+        set -e
+        IFACE="{{ ansible_default_ipv4.interface }}"
+        tc qdisc replace dev "$IFACE" root handle 1: htb default 1
+        tc class replace dev "$IFACE" parent 1: classid 1:1 htb rate {{ bandwidth_cap }} ceil {{ bandwidth_cap }}
+        tc qdisc replace dev "$IFACE" parent 1:1 fq
+        tc qdisc show dev "$IFACE"
+      args:
+        executable: /bin/bash
+
+    - name: Install benchmark runner script
+      copy:
+        src: files/oci_netbench_run.sh
+        dest: /usr/local/bin/oci_netbench_run.sh
+        owner: root
+        group: root
+        mode: "0755"
+
+- name: Configure iptables or nftables target environment
+  hosts: fw_targets
+  become: true
+  vars:
+    iperf_port: 5201
+    firewall_mode: "nftables"
+    firewall_rule_count: 128
+  tasks:
+    - name: Detach any XDP program from firewall target
+      shell: |
+        IFACE="{{ ansible_default_ipv4.interface }}"
+        ip link set dev "$IFACE" xdp off || true
+        ip link set dev "$IFACE" xdpgeneric off || true
+        ip link set dev "$IFACE" xdpdrv off || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Flush existing firewall state
+      shell: |
+        nft flush ruleset || true
+        iptables -F || true
+        iptables -X || true
+        iptables -t raw -F || true
+        iptables -t mangle -F || true
+        iptables -P INPUT ACCEPT || true
+        iptables -P FORWARD ACCEPT || true
+        iptables -P OUTPUT ACCEPT || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Configure iptables raw prerouting rules
+      shell: |
+        set -e
+        iptables -t raw -F PREROUTING
+        for p in $(seq 10000 $((10000 + {{ firewall_rule_count }} - 1))); do
+          iptables -t raw -A PREROUTING -p udp --dport "$p" -j DROP
+          iptables -t raw -A PREROUTING -p tcp --dport "$p" -j DROP
+        done
+        iptables -t raw -A PREROUTING -p tcp --dport {{ iperf_port }} -j ACCEPT
+        iptables -t raw -A PREROUTING -p udp --dport {{ iperf_port }} -j ACCEPT
+        iptables-save > /root/iptables-bench.rules
+      args:
+        executable: /bin/bash
+      when: firewall_mode == "iptables"
+
+    - name: Configure nftables raw prerouting rules
+      shell: |
+        set -e
+        cat > /etc/nftables.conf <<'NFTHEAD'
+        flush ruleset
+        table inet bench {
+          chain preraw {
+            type filter hook prerouting priority raw; policy accept;
+        NFTHEAD
+        for p in $(seq 10000 $((10000 + {{ firewall_rule_count }} - 1))); do
+          echo "    udp dport $p drop" >> /etc/nftables.conf
+          echo "    tcp dport $p drop" >> /etc/nftables.conf
+        done
+        cat >> /etc/nftables.conf <<NFTTAIL
+            tcp dport {{ iperf_port }} accept
+            udp dport {{ iperf_port }} accept
+          }
+        }
+        NFTTAIL
+        nft -f /etc/nftables.conf
+        systemctl enable nftables
+      args:
+        executable: /bin/bash
+      when: firewall_mode == "nftables"
+
+    - name: Show active firewall state
+      shell: |
+        echo "=== iptables raw ==="
+        iptables -t raw -S || true
+        echo "=== nft ruleset ==="
+        nft list ruleset || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+- name: Configure XDP target environment
+  hosts: xdp_targets
+  become: true
+  vars:
+    iperf_port: 5201
+    firewall_rule_count: 128
+    xdp_mode: "xdpgeneric"
+  tasks:
+    - name: Flush kernel firewall state on XDP target
+      shell: |
+        nft flush ruleset || true
+        iptables -F || true
+        iptables -X || true
+        iptables -t raw -F || true
+        iptables -t mangle -F || true
+        iptables -P INPUT ACCEPT || true
+        iptables -P FORWARD ACCEPT || true
+        iptables -P OUTPUT ACCEPT || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Copy XDP program source
+      copy:
+        src: files/xdp_filter.c
+        dest: /opt/xdp_filter.c
+        mode: "0644"
+
+    - name: Compile XDP program
+      shell: |
+        set -e
+        ARCH="x86"
+        if [ "{{ ansible_architecture }}" = "aarch64" ] || [ "{{ ansible_architecture }}" = "arm64" ]; then ARCH="arm64"; fi
+        INCDIR="/usr/include/$(gcc -dumpmachine)"
+        clang -O2 -g -Wall -target bpf \
+          -D__TARGET_ARCH_${ARCH} \
+          -DTEST_PORT={{ iperf_port }} \
+          -DRULE_SCAN={{ firewall_rule_count }} \
+          -I"${INCDIR}" \
+          -c /opt/xdp_filter.c -o /opt/xdp_filter.o
+        llvm-objdump -S /opt/xdp_filter.o > /opt/xdp_filter.objdump.txt
+      args:
+        executable: /bin/bash
+
+    - name: Attach XDP program
+      shell: |
+        set -e
+        IFACE="{{ ansible_default_ipv4.interface }}"
+        ip link set dev "$IFACE" xdp off || true
+        ip link set dev "$IFACE" xdpgeneric off || true
+        ip link set dev "$IFACE" xdpdrv off || true
+        ip link set dev "$IFACE" {{ xdp_mode }} obj /opt/xdp_filter.o sec xdp
+        ip -details link show dev "$IFACE"
+      args:
+        executable: /bin/bash
+
+- name: Start iperf3 servers on targets
+  hosts: targets
+  become: true
+  vars:
+    iperf_port: 5201
+  tasks:
+    - name: Restart iperf3 server daemon
+      shell: |
+        pkill iperf3 || true
+        sleep 1
+        iperf3 -s -D -p {{ iperf_port }}
+        pgrep -a iperf3
+      args:
+        executable: /bin/bash

@@ -1,0 +1,50 @@
+---
+- name: Run benchmark clients and fetch result bundles
+  hosts: clients
+  become: true
+  gather_facts: true
+  vars:
+    iperf_port: 5201
+    udp_rate: "10G"
+    duration: 30
+    parallel_streams: 8
+    ping_count: 100
+    udp_len: 64
+    test_label: "manual"
+    run_id: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+  tasks:
+    - name: Pick peer and label for this client
+      set_fact:
+        target_peer_name: "{{ peer_name }}"
+        bench_mode: "{{ 'xdp' if bench_env == 'xdp' else test_label }}"
+        bench_path: "{{ 'xdp' if bench_env == 'xdp' else 'firewall' }}"
+
+    - name: Build benchmark label
+      set_fact:
+        bench_label: "{{ bench_mode }}_{{ shape_key }}_{{ bench_path }}"
+
+    - name: Run benchmark
+      shell: |
+        set -e
+        /usr/local/bin/oci_netbench_run.sh \
+          "{{ hostvars[target_peer_name].private_ip }}" \
+          "{{ bench_label }}" \
+          "{{ iperf_port }}" \
+          "{{ udp_rate }}" \
+          "{{ duration }}" \
+          "{{ parallel_streams }}" \
+          "{{ ping_count }}" \
+          "{{ udp_len }}"
+      args:
+        executable: /bin/bash
+      register: bench_run
+
+    - name: Fetch result tarball
+      fetch:
+        src: "{{ bench_run.stdout_lines[-1] }}"
+        dest: "../results/{{ run_id }}/"
+        flat: true
+
+    - name: Print result bundle path
+      debug:
+        msg: "Fetched {{ bench_run.stdout_lines[-1] }} into results/{{ run_id }}/"

@@ -1,0 +1,35 @@
+tenancy_ocid         = "ocid1.tenancy.oc1..replace_me"
+user_ocid            = "ocid1.user.oc1..replace_me"
+fingerprint          = "replace:me:with:key:fingerprint"
+private_key_path     = "~/.oci/oci_api_key.pem"
+region               = "us-ashburn-1"
+compartment_ocid     = "ocid1.compartment.oc1..replace_me"
+ssh_public_key_path  = "~/.ssh/id_rsa.pub"
+ssh_private_key_path = "~/.ssh/id_rsa"
+
+# Strongly recommended: replace this with your workstation public IP /32.
+allowed_ssh_cidr = "203.0.113.10/32"
+
+# This deploys 8 instances total:
+#   e6:    fw client/target + xdp client/target
+#   e6_ax: fw client/target + xdp client/target
+# Every instance is locked to 10 OCPUs and 80 GB RAM.
+benchmark_shapes = {
+  e6 = {
+    shape         = "VM.Standard.E6.Flex"
+    ocpus         = 10
+    memory_in_gbs = 80
+  }
+  e6_ax = {
+    shape         = "VM.Standard.E6.Ax.Flex"
+    ocpus         = 10
+    memory_in_gbs = 80
+  }
+
+  # Optional: uncomment if you also want to keep the old E4 baseline in the same run.
+  # e4 = {
+  #   shape         = "VM.Standard.E4.Flex"
+  #   ocpus         = 10
+  #   memory_in_gbs = 80
+  # }
+}

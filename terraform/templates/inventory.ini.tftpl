@@ -1,0 +1,72 @@
+[all]
+%{ for name, meta in node_meta ~}
+${name} ansible_host=${nodes[name].public_ip_address} private_ip=${nodes[name].private_ip_address} peer_name=${meta.peer_name} shape_key=${meta.shape_key} oci_shape=${meta.shape} bench_env=${meta.bench_env} bench_role=${meta.role} ansible_user=ubuntu ansible_ssh_private_key_file=${ssh_private_key_path}
+%{ endfor ~}
+
+[clients]
+%{ for name, meta in node_meta ~}
+%{ if meta.role == "client" ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+[targets]
+%{ for name, meta in node_meta ~}
+%{ if meta.role == "target" ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+[fw]
+%{ for name, meta in node_meta ~}
+%{ if meta.bench_env == "fw" ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+[xdp]
+%{ for name, meta in node_meta ~}
+%{ if meta.bench_env == "xdp" ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+[fw_clients]
+%{ for name, meta in node_meta ~}
+%{ if meta.bench_env == "fw" && meta.role == "client" ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+[xdp_clients]
+%{ for name, meta in node_meta ~}
+%{ if meta.bench_env == "xdp" && meta.role == "client" ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+[fw_targets]
+%{ for name, meta in node_meta ~}
+%{ if meta.bench_env == "fw" && meta.role == "target" ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+[xdp_targets]
+%{ for name, meta in node_meta ~}
+%{ if meta.bench_env == "xdp" && meta.role == "target" ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+%{ for shape_key in shape_keys ~}
+[${shape_key}]
+%{ for name, meta in node_meta ~}
+%{ if meta.shape_key == shape_key ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+%{ endfor ~}
+[all:vars]
+ansible_python_interpreter=/usr/bin/python3

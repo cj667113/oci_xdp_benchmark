@@ -381,7 +381,7 @@ def generate_pngs(rows: List[Dict[str, Any]], root: Path) -> List[Path]:
             offsets_by_mode = [bar_width * (idx - (mode_count - 1) / 2) for idx in range(mode_count)]
             fig_width = max(9.5, 3.2 + len(shape_keys) * 2.9)
             fig, ax = plt.subplots(figsize=(fig_width, 6.4))
-            fig.subplots_adjust(left=0.11, right=0.97, bottom=0.15, top=0.70)
+            fig.subplots_adjust(left=0.11, right=0.97, bottom=0.15, top=0.68)
 
             observed_values: List[float] = []
             sample_sizes = set()
@@ -497,12 +497,20 @@ def generate_pngs(rows: List[Dict[str, Any]], root: Path) -> List[Path]:
             if len(sample_sizes) == 1:
                 count = next(iter(sample_sizes))
                 sample_text = f" · n={count} per bar"
-            fig.suptitle(title, x=0.11, y=0.955, ha="left", fontsize=19, fontweight="bold", color="#0F172A")
+            fig.suptitle(
+                title,
+                x=0.5,
+                y=0.97,
+                ha="center",
+                fontsize=19,
+                fontweight="bold",
+                color="#0F172A",
+            )
             fig.text(
-                0.11,
-                0.905,
+                0.5,
+                0.895,
                 f"{hint.capitalize()} · Bar = mean · Whisker = 95% CI (n≥2) · Dots = runs{sample_text} · Δ vs iptables",
-                ha="left",
+                ha="center",
                 va="center",
                 fontsize=9.5,
                 color="#64748B",
@@ -521,8 +529,8 @@ def generate_pngs(rows: List[Dict[str, Any]], root: Path) -> List[Path]:
                 )
             fig.legend(
                 handles=legend_handles,
-                loc="upper left",
-                bbox_to_anchor=(0.102, 0.845),
+                loc="upper center",
+                bbox_to_anchor=(0.5, 0.825),
                 ncol=min(len(legend_handles), 4),
                 frameon=False,
                 handletextpad=0.45,

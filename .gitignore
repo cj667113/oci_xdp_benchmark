@@ -1,6 +1,6 @@
 terraform/terraform.tfvars
 .terraform*
-terraform.tfstate
+terraform.tfstate*
 inventory.ini
 results/*
 .DS_Store

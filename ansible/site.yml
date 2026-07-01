@@ -5,9 +5,7 @@
   vars:
     bandwidth_cap: "10gbit"
     iperf_port: 5201
-    firewall_mode: "nftables"       # nftables or iptables
     firewall_rule_count: 128         # synthetic no-match rules before accept
-    xdp_mode: "xdpgeneric"          # xdpgeneric, xdpdrv, or auto (prefer native and fall back to generic)
   tasks:
     - name: Verify expected Oracle Linux platform image
       assert:
@@ -134,9 +132,17 @@
   become: true
   vars:
     iperf_port: 5201
-    firewall_mode: "nftables"
+    firewall_mode: "{{ benchmark_firewall_mode }}"
     firewall_rule_count: 128
   tasks:
+    - name: Verify firewall mode matches this dedicated lab
+      assert:
+        that:
+          - benchmark_test_mode == firewall_mode
+        fail_msg: >-
+          Refusing to configure dedicated {{ benchmark_test_mode }} hardware as
+          {{ firewall_mode }}. Use the matching mode-specific inventory group.
+
     - name: Detach any XDP program from firewall target
       shell: |
         IFACE="{{ ansible_facts['default_ipv4']['interface'] }}"
@@ -217,8 +223,18 @@
   vars:
     iperf_port: 5201
     firewall_rule_count: 128
-    xdp_mode: "xdpgeneric"
+    xdp_mode: "{{ benchmark_xdp_mode }}"
   tasks:
+    - name: Verify XDP mode matches this dedicated lab
+      assert:
+        that:
+          - >-
+            xdp_mode == benchmark_xdp_mode or
+            (xdp_mode == 'auto' and benchmark_test_mode == 'xdp-native')
+        fail_msg: >-
+          Refusing to configure dedicated {{ benchmark_test_mode }} hardware
+          with {{ xdp_mode }}. Use the matching mode-specific inventory group.
+
     - name: Validate requested XDP mode
       assert:
         that:

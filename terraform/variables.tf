@@ -53,13 +53,18 @@ variable "allowed_ssh_cidr" {
 }
 
 variable "vcn_cidr" {
-  description = "VCN CIDR for the benchmark lab. The default subnet plan assumes this is at least a /16."
+  description = "Private address pool divided into one /20 VCN and one /24 subnet per shape/mode lab. Keep the default /16 unless you also revise the CIDR plan."
   type        = string
   default     = "10.77.0.0/16"
+
+  validation {
+    condition     = can(cidrhost(var.vcn_cidr, 0)) && !strcontains(var.vcn_cidr, ":") && can(regex("/16$", var.vcn_cidr))
+    error_message = "vcn_cidr must be an IPv4 /16 so it can supply sixteen /20 lab VCNs with /24 subnets; for example, 10.77.0.0/16."
+  }
 }
 
 variable "benchmark_shapes" {
-  description = "Shape matrix to deploy. Each shape gets its own fw client/target and XDP client/target pair."
+  description = "Shape matrix to deploy. Each shape gets four isolated mode labs, each with its own client, target, VCN, and subnet."
   type = map(object({
     shape         = string
     ocpus         = number
@@ -84,6 +89,11 @@ variable "benchmark_shapes" {
       for _, cfg in var.benchmark_shapes : cfg.ocpus == 10 && cfg.memory_in_gbs == 80
     ])
     error_message = "This benchmark profile is locked to 10 OCPUs and 80 GB RAM per instance. Change the validation if you intentionally want other sizes."
+  }
+
+  validation {
+    condition     = length(var.benchmark_shapes) <= 4
+    error_message = "The isolated /16 network plan supports at most four shapes (four mode-specific VCNs per shape)."
   }
 }
 

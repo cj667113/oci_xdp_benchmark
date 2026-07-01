@@ -19,21 +19,21 @@ if ! [[ "${REPETITIONS}" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-limit_for_env() {
-  local env_group="$1"
+limit_for_group() {
+  local mode_group="$1"
   if [[ -n "${LIMIT}" ]]; then
-    # Intersect the user-provided shape/pattern limit with the benchmark environment.
-    # Examples: LIMIT=e6 -> e6:&fw or e6:&xdp
-    printf '%s:&%s' "${LIMIT}" "${env_group}"
+    # Intersect the user-provided shape/pattern with the dedicated mode lab.
+    # Example: LIMIT=e6 with iptables -> e6:&iptables.
+    printf '%s:&%s' "${LIMIT}" "${mode_group}"
   else
-    printf '%s' "${env_group}"
+    printf '%s' "${mode_group}"
   fi
 }
 
 run_firewall_mode() {
   local mode="$1"
   local limit_pattern
-  limit_pattern="$(limit_for_env fw)"
+  limit_pattern="$(limit_for_group "${mode}")"
 
   echo "=== configuring ${mode}; rule_count=${RULE_COUNT}; limit=${limit_pattern} ==="
   ansible-playbook -i ../inventory.ini site.yml \
@@ -55,8 +55,9 @@ run_firewall_mode() {
 run_xdp_mode() {
   local test_mode="$1"
   local attach_mode="$2"
+  local mode_group="$3"
   local limit_pattern
-  limit_pattern="$(limit_for_env xdp)"
+  limit_pattern="$(limit_for_group "${mode_group}")"
 
   echo "=== configuring ${test_mode}; rule_count=${RULE_COUNT}; xdp_mode=${attach_mode}; limit=${limit_pattern} ==="
   ansible-playbook -i ../inventory.ini site.yml \
@@ -81,15 +82,26 @@ for mode in ${MODES}; do
       run_firewall_mode "${mode}"
       ;;
     xdp-generic)
-      run_xdp_mode "xdp-generic" "xdpgeneric"
+      run_xdp_mode "xdp-generic" "xdpgeneric" "xdp_generic"
       ;;
     xdp-native)
-      run_xdp_mode "xdp-native" "xdpdrv"
+      run_xdp_mode "xdp-native" "xdpdrv" "xdp_native"
       ;;
     xdp)
       # Backward-compatible alias for existing automation. New runs should use
       # xdp-generic and xdp-native so result labels are unambiguous.
-      run_xdp_mode "xdp" "${XDP_MODE}"
+      case "${XDP_MODE}" in
+        xdpgeneric)
+          run_xdp_mode "xdp" "${XDP_MODE}" "xdp_generic"
+          ;;
+        xdpdrv|auto)
+          run_xdp_mode "xdp" "${XDP_MODE}" "xdp_native"
+          ;;
+        *)
+          echo "Unsupported XDP_MODE '${XDP_MODE}'. Valid values: xdpgeneric xdpdrv auto" >&2
+          exit 2
+          ;;
+      esac
       ;;
     *)
       echo "Unsupported mode '${mode}'. Valid MODES entries: iptables nftables xdp-generic xdp-native xdp" >&2

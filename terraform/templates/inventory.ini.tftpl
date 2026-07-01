@@ -1,6 +1,6 @@
 [all]
 %{ for name, meta in node_meta ~}
-${name} ansible_host=${nodes[name].public_ip_address} private_ip=${nodes[name].private_ip_address} peer_name=${meta.peer_name} shape_key=${meta.shape_key} oci_shape=${meta.shape} oci_image=${meta.image_name} oracle_linux_major_version=${oracle_linux_major_version} bench_env=${meta.bench_env} bench_role=${meta.role} ansible_user=opc ansible_ssh_private_key_file=${ssh_private_key_path}
+${name} ansible_host=${nodes[name].public_ip_address} private_ip=${nodes[name].private_ip_address} peer_name=${meta.peer_name} shape_key=${meta.shape_key} oci_shape=${meta.shape} oci_image=${meta.image_name} oracle_linux_major_version=${oracle_linux_major_version} bench_env=${meta.bench_env} bench_role=${meta.role} benchmark_test_mode=${meta.test_mode} benchmark_mode_group=${meta.mode_key} benchmark_firewall_mode=${meta.firewall_mode != "" ? meta.firewall_mode : "none"} benchmark_xdp_mode=${meta.xdp_mode != "" ? meta.xdp_mode : "none"} ansible_user=opc ansible_ssh_private_key_file=${ssh_private_key_path}
 %{ endfor ~}
 
 [clients]
@@ -59,6 +59,29 @@ ${name}
 %{ endif ~}
 %{ endfor ~}
 
+%{ for mode_key in mode_keys ~}
+[${mode_key}]
+%{ for name, meta in node_meta ~}
+%{ if meta.mode_key == mode_key ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+[${mode_key}_clients]
+%{ for name, meta in node_meta ~}
+%{ if meta.mode_key == mode_key && meta.role == "client" ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+[${mode_key}_targets]
+%{ for name, meta in node_meta ~}
+%{ if meta.mode_key == mode_key && meta.role == "target" ~}
+${name}
+%{ endif ~}
+%{ endfor ~}
+
+%{ endfor ~}
 %{ for shape_key in shape_keys ~}
 [${shape_key}]
 %{ for name, meta in node_meta ~}

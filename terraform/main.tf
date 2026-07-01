@@ -38,99 +38,114 @@ locals {
     for shape_key, images in local.oracle_linux_image_candidates : shape_key => try(images[0].display_name, "")
   }
 
-  environment_types = {
-    fw = {
-      display = "firewall"
+  # Every benchmark mode gets a dedicated client, target, VCN, and subnet.
+  # Underscores are used in Terraform/Ansible keys; test_mode keeps the labels
+  # written into result bundles.
+  benchmark_modes = {
+    iptables = {
+      bench_env     = "fw"
+      test_mode     = "iptables"
+      firewall_mode = "iptables"
+      xdp_mode      = ""
     }
-    xdp = {
-      display = "xdp"
+    nftables = {
+      bench_env     = "fw"
+      test_mode     = "nftables"
+      firewall_mode = "nftables"
+      xdp_mode      = ""
     }
-  }
-
-  subnets = merge([
-    for shape_key, _profile in var.benchmark_shapes : {
-      for env_key, _env in local.environment_types : "${shape_key}_${env_key}" => {
-        shape_key    = shape_key
-        env          = env_key
-        display_name = "xdpbench-${shape_key}-${env_key}-subnet"
-        dns_label    = substr(replace("${shape_key}${env_key}", "_", ""), 0, 15)
-        cidr_block   = cidrsubnet(var.vcn_cidr, 8, index(keys(var.benchmark_shapes), shape_key) * 2 + index(keys(local.environment_types), env_key))
-      }
+    xdp_generic = {
+      bench_env     = "xdp"
+      test_mode     = "xdp-generic"
+      firewall_mode = ""
+      xdp_mode      = "xdpgeneric"
     }
-  ]...)
-
-  role_templates = {
-    fw_client = {
-      subnet_key  = "fw"
-      role        = "client"
-      bench_env   = "fw"
-      peer_suffix = "fw_target"
-    }
-    fw_target = {
-      subnet_key  = "fw"
-      role        = "target"
-      bench_env   = "fw"
-      peer_suffix = "fw_client"
-    }
-    xdp_client = {
-      subnet_key  = "xdp"
-      role        = "client"
-      bench_env   = "xdp"
-      peer_suffix = "xdp_target"
-    }
-    xdp_target = {
-      subnet_key  = "xdp"
-      role        = "target"
-      bench_env   = "xdp"
-      peer_suffix = "xdp_client"
+    xdp_native = {
+      bench_env     = "xdp"
+      test_mode     = "xdp-native"
+      firewall_mode = ""
+      xdp_mode      = "xdpdrv"
     }
   }
 
-  nodes = merge([
+  labs = merge([
     for shape_key, profile in var.benchmark_shapes : {
-      for node_key, template in local.role_templates : "${shape_key}_${node_key}" => merge(template, {
+      for mode_key, mode in local.benchmark_modes : "${shape_key}_${mode_key}" => merge(mode, {
+        lab_key       = "${shape_key}_${mode_key}"
+        mode_key      = mode_key
         shape_key     = shape_key
         shape         = profile.shape
         ocpus         = profile.ocpus
         memory_in_gbs = profile.memory_in_gbs
         image_name    = local.image_names[shape_key]
-        display_name  = "xdpbench-${shape_key}-${replace(node_key, "_", "-")}"
-        peer_name     = "${shape_key}_${template.peer_suffix}"
+        vcn_cidr = cidrsubnet(
+          var.vcn_cidr,
+          4,
+          index(keys(var.benchmark_shapes), shape_key) * length(local.benchmark_modes) + index(keys(local.benchmark_modes), mode_key)
+        )
+        subnet_cidr = cidrsubnet(
+          cidrsubnet(
+            var.vcn_cidr,
+            4,
+            index(keys(var.benchmark_shapes), shape_key) * length(local.benchmark_modes) + index(keys(local.benchmark_modes), mode_key)
+          ),
+          4,
+          0
+        )
+      })
+    }
+  ]...)
+
+  nodes = merge([
+    for lab_key, lab in local.labs : {
+      "${lab_key}_client" = merge(lab, {
+        role         = "client"
+        display_name = "xdpbench-${replace(lab_key, "_", "-")}-client"
+        peer_name    = "${lab_key}_target"
+      })
+      "${lab_key}_target" = merge(lab, {
+        role         = "target"
+        display_name = "xdpbench-${replace(lab_key, "_", "-")}-target"
+        peer_name    = "${lab_key}_client"
       })
     }
   ]...)
 }
 
 resource "oci_core_vcn" "bench" {
+  for_each       = local.labs
   compartment_id = var.compartment_ocid
-  cidr_block     = var.vcn_cidr
-  display_name   = "xdpbench-vcn"
-  dns_label      = "xdpbench"
+  cidr_block     = each.value.vcn_cidr
+  display_name   = "xdpbench-${replace(each.key, "_", "-")}-vcn"
+  dns_label      = substr(replace(each.key, "_", ""), 0, 15)
 }
 
 resource "oci_core_internet_gateway" "bench" {
+  for_each       = local.labs
   compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.bench.id
-  display_name   = "xdpbench-igw"
+  vcn_id         = oci_core_vcn.bench[each.key].id
+  display_name   = "xdpbench-${replace(each.key, "_", "-")}-igw"
   enabled        = true
 }
 
 resource "oci_core_route_table" "public" {
+  for_each       = local.labs
   compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.bench.id
-  display_name   = "xdpbench-public-rt"
+  vcn_id         = oci_core_vcn.bench[each.key].id
+  display_name   = "xdpbench-${replace(each.key, "_", "-")}-public-rt"
 
   route_rules {
-    network_entity_id = oci_core_internet_gateway.bench.id
+    network_entity_id = oci_core_internet_gateway.bench[each.key].id
     destination       = "0.0.0.0/0"
     destination_type  = "CIDR_BLOCK"
   }
 }
 
 resource "oci_core_security_list" "minimal" {
+  for_each       = local.labs
   compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.bench.id
-  display_name   = "xdpbench-minimal-sl"
+  vcn_id         = oci_core_vcn.bench[each.key].id
+  display_name   = "xdpbench-${replace(each.key, "_", "-")}-minimal-sl"
 
   egress_security_rules {
     protocol    = "all"
@@ -139,13 +154,15 @@ resource "oci_core_security_list" "minimal" {
 }
 
 resource "oci_core_network_security_group" "bench" {
+  for_each       = local.labs
   compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.bench.id
-  display_name   = "xdpbench-nsg"
+  vcn_id         = oci_core_vcn.bench[each.key].id
+  display_name   = "xdpbench-${replace(each.key, "_", "-")}-nsg"
 }
 
 resource "oci_core_network_security_group_security_rule" "ssh" {
-  network_security_group_id = oci_core_network_security_group.bench.id
+  for_each                  = local.labs
+  network_security_group_id = oci_core_network_security_group.bench[each.key].id
   direction                 = "INGRESS"
   protocol                  = "6"
   source                    = var.allowed_ssh_cidr
@@ -161,16 +178,18 @@ resource "oci_core_network_security_group_security_rule" "ssh" {
 }
 
 resource "oci_core_network_security_group_security_rule" "internal_all" {
-  network_security_group_id = oci_core_network_security_group.bench.id
+  for_each                  = local.labs
+  network_security_group_id = oci_core_network_security_group.bench[each.key].id
   direction                 = "INGRESS"
   protocol                  = "all"
-  source                    = var.vcn_cidr
+  source                    = each.value.subnet_cidr
   source_type               = "CIDR_BLOCK"
   stateless                 = false
 }
 
 resource "oci_core_network_security_group_security_rule" "egress_all" {
-  network_security_group_id = oci_core_network_security_group.bench.id
+  for_each                  = local.labs
+  network_security_group_id = oci_core_network_security_group.bench[each.key].id
   direction                 = "EGRESS"
   protocol                  = "all"
   destination               = "0.0.0.0/0"
@@ -179,14 +198,14 @@ resource "oci_core_network_security_group_security_rule" "egress_all" {
 }
 
 resource "oci_core_subnet" "env" {
-  for_each                   = local.subnets
+  for_each                   = local.labs
   compartment_id             = var.compartment_ocid
-  vcn_id                     = oci_core_vcn.bench.id
-  cidr_block                 = each.value.cidr_block
-  display_name               = each.value.display_name
-  dns_label                  = each.value.dns_label
-  route_table_id             = oci_core_route_table.public.id
-  security_list_ids          = [oci_core_security_list.minimal.id]
+  vcn_id                     = oci_core_vcn.bench[each.key].id
+  cidr_block                 = each.value.subnet_cidr
+  display_name               = "xdpbench-${replace(each.key, "_", "-")}-subnet"
+  dns_label                  = "bench"
+  route_table_id             = oci_core_route_table.public[each.key].id
+  security_list_ids          = [oci_core_security_list.minimal[each.key].id]
   prohibit_public_ip_on_vnic = !var.assign_public_ip
 }
 
@@ -211,9 +230,9 @@ resource "oci_core_instance" "nodes" {
   }
 
   create_vnic_details {
-    subnet_id        = oci_core_subnet.env["${each.value.shape_key}_${each.value.subnet_key}"].id
+    subnet_id        = oci_core_subnet.env[each.value.lab_key].id
     assign_public_ip = var.assign_public_ip
-    nsg_ids          = [oci_core_network_security_group.bench.id]
+    nsg_ids          = [oci_core_network_security_group.bench[each.value.lab_key].id]
     display_name     = "${each.value.display_name}-vnic"
     hostname_label   = replace(each.key, "_", "-")
   }
@@ -231,6 +250,7 @@ resource "oci_core_instance" "nodes" {
     project = "xdpbench"
     shape   = each.value.shape_key
     env     = each.value.bench_env
+    mode    = each.value.test_mode
     role    = each.value.role
   }
 }
@@ -253,6 +273,7 @@ resource "local_file" "ansible_inventory" {
     nodes                      = data.oci_core_vnic.nodes
     node_meta                  = local.nodes
     shape_keys                 = keys(var.benchmark_shapes)
+    mode_keys                  = keys(local.benchmark_modes)
     oracle_linux_major_version = var.oracle_linux_major_version
   })
 }

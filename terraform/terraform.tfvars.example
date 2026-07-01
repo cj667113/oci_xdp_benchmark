@@ -10,13 +10,18 @@ ssh_private_key_path = "~/.ssh/id_rsa"
 # Strongly recommended: replace this with your workstation public IP /32.
 allowed_ssh_cidr = "203.0.113.10/32"
 
+# Address pool split into one /20 VCN and one /24 subnet per isolated lab.
+# Keep this as a /16 unless you also revise the CIDR calculations in main.tf.
+vcn_cidr = "10.77.0.0/16"
+
 # Selects the newest standard Oracle Linux 10 platform image compatible with
 # each shape. E6 and E6.Ax (AMD Acceleron) are both x86_64 shapes.
 oracle_linux_major_version = "10"
 
-# This deploys 8 instances total:
-#   e6:    fw client/target + xdp client/target
-#   e6_ax: fw client/target + xdp client/target
+# This deploys 16 instances total. Every shape gets a dedicated client/target,
+# VCN, and subnet for each mode: iptables, nftables, xdp-generic, xdp-native.
+#   e6:    4 isolated labs x 2 instances
+#   e6_ax: 4 isolated labs x 2 instances
 # Every instance is locked to 10 OCPUs and 80 GB RAM.
 benchmark_shapes = {
   e6 = {

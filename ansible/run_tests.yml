@@ -11,7 +11,7 @@
     ping_count: 100
     udp_len: 64
     benchmark_repetitions: 10
-    test_label: "manual"
+    test_label: "{{ benchmark_test_mode | default('manual') }}"
     run_id: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
   tasks:
     - name: Pick peer and label for this client
@@ -26,6 +26,14 @@
           - (benchmark_repetitions | int) > 0
           - (benchmark_repetitions | string) is match('^[1-9][0-9]*$')
         fail_msg: "benchmark_repetitions must be a positive integer"
+
+    - name: Verify benchmark label matches this dedicated lab
+      assert:
+        that:
+          - bench_mode in [benchmark_test_mode, 'manual', 'xdp']
+        fail_msg: >-
+          Refusing to label dedicated {{ benchmark_test_mode }} hardware as
+          {{ bench_mode }}. Use the matching mode-specific inventory group.
 
     - name: Build benchmark label prefix
       set_fact:
